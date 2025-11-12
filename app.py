@@ -176,8 +176,13 @@ except Exception as e:
 # 4. Bereken Totaal voor sortering
 df_agg['Totaal'] = df_agg[x_axes].sum(axis=1)
 
-# 5. Sorteer en Top N
-df_top_n = df_agg.sort_values('Totaal', ascending=sort_ascending).tail(top_n)
+# 5. Selecteer Top N (hoogste waarden)
+# Oplossing: Haal ALTIJD de Top N Hoogste waarden op met ascending=False en .head()
+df_top_n = df_agg.sort_values('Totaal', ascending=False).head(top_n)
+
+# 5b. Sorteer de Top N subset voor de visuele weergave (Plotly)
+# Pas nu de door de gebruiker gewenste volgorde toe op de Top N selectie
+df_top_n = df_top_n.sort_values('Totaal', ascending=sort_ascending)
 
 # 6. 'Melt' de data voor gestapelde grafiek in Plotly
 try:
@@ -225,15 +230,17 @@ fig.update_layout(
 # Voeg datalabels toe indien aangevinkt
 if advanced_mode and show_data_labels:
     # Formatteer de labels met een duizendtal-separator
+    # Oplossing: textposition aangepast naar 'outside' voor betere zichtbaarheid
     fig.update_traces(
         texttemplate='%{value:,.0f}', 
-        textposition='auto'
+        textposition='outside' 
     )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # --- TOON DATA (optioneel) ---
 with st.expander("Toon de Top N geaggregeerde data"):
+    # Zorg ervoor dat de tabel in de hoogste volgorde wordt weergegeven
     st.dataframe(df_top_n.set_index(y_axis).sort_values('Totaal', ascending=False))
 
 with st.expander("Toon de eerste 100 rijen van de ruwe data"):
