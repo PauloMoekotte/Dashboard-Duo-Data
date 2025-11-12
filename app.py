@@ -50,11 +50,15 @@ def get_year_col(df):
 # Hulpfunctie om de CSV te laden
 @st.cache_data
 def load_data(uploaded_file):
-    """Laadt de CSV met een puntkomma als scheidingsteken."""
+    """
+    Laadt de CSV met een puntkomma als scheidingsteken.
+    Gebruikt 'latin-1' codering om UnicodeDecodeError te voorkomen bij speciale karakters.
+    """
     try:
         # We lezen de data in met 'object' dtype om te voorkomen dat pandas 
         # getallen met een '.' (bijv. 1.000) als floats interpreteert.
-        df = pd.read_csv(uploaded_file, delimiter=';', dtype=str)
+        # Belangrijk: gebruik encoding='latin-1' voor de DUO-bestanden
+        df = pd.read_csv(uploaded_file, delimiter=';', dtype=str, encoding='latin-1')
         return df
     except Exception as e:
         st.error(f"Fout bij het lezen van het bestand: {e}")
