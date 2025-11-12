@@ -5,36 +5,43 @@ import plotly.graph_objects as go
 
 # Hulpfunctie om numerieke kolommen te identificeren op basis van inhoud
 @st.cache_data
-def get_numeric_cols(df):
+def get_numeric_cols(df, threshold=0.6, max_sample=200):
     """
-    Identificeert numerieke kolommen door de eerste 50 rijen te controleren.
-    Een kolom wordt als numeriek beschouwd als >80% van de waarden numeriek is.
+    Identificeert numerieke kolommen door tot max_sample niet-lege rijen te controleren.
+    Een kolom wordt als numeriek beschouwd als >threshold van de waarden numeriek is.
     
     Gebruikt Nederlandse/Europese notatie: verwijdert . (duizendtal), vervangt , door . (decimaal).
+    Threshold en samplegrootte zijn instelbaar.
     """
     numeric_cols = []
+    possible_numeric_cols = []
     for col in df.columns:
         # Snelle check als het type al numeriek is
         if pd.api.types.is_numeric_dtype(df[col]):
             numeric_cols.append(col)
             continue
-        
-        # Probeer te converteren als het een string/object type is
+
         try:
-            # Neem een steekproef, zet naar string
-            sample = df[col].sample(min(50, len(df))).astype(str)
-            
-            # Opschonen voor Nederlandse notatie: verwijder . (duizendtal), vervang , door . (decimaal)
+            # Gebruik tot max_sample niet-lege waardes
+            sample = df[col].dropna().astype(str).head(max_sample)
+            if len(sample) == 0:
+                continue
+
+            # Opschonen voor Nederlandse notatie: verwijder . (duizendtal), vervang , (decimaal) door .
             cleaned_sample = sample.str.replace('.', '', regex=False).str.replace(',', '.', regex=False).str.strip()
-            
-            # Check of het (na opschonen) numeriek is
             numeric_ratio = pd.to_numeric(cleaned_sample, errors='coerce').notna().mean()
-            
-            # Een kolom is numeriek als minstens 80% van de steekproef succesvol geconverteerd kon worden
-            if numeric_ratio >= 0.8:
+
+            # Een kolom is numeriek als threshold van de sample geconverteerd kon worden
+            if numeric_ratio >= threshold:
                 numeric_cols.append(col)
+            elif numeric_ratio >= 0.3:
+                possible_numeric_cols.append(col)
         except Exception:
             continue
+    # Debug-output om te helpen bij het vinden van mogelijke missende kolommen
+    st.sidebar.write("Detectie numerieke kolommen:", numeric_cols)
+    if possible_numeric_cols:
+        st.sidebar.info(f"Mogelijk interessant als numeriek: {', '.join(possible_numeric_cols)}")
     return numeric_cols
 
 # Hulpfunctie om de 'jaar'-kolom te vinden
@@ -126,6 +133,22 @@ sort_order_str = st.sidebar.selectbox(
 )
 sort_ascending = (sort_order_str == "Laag naar Hoog")
 
+# --- Aanvulling: Optionele handmatige override voor numerieke kolommen ---
+# Toon een expander waar je alsnog extra kolommen als numeriek kunt aanmerken
+with st.sidebar.expander("Numerieke kolommen handmatig toevoegen"):
+    all_possibles = [col for col in all_cols if col not in numeric_cols]
+    manual_numeric = st.multiselect(
+        "Selecteer kolommen die je toch als numeriek wilt laten behandelen (override):",
+        options=all_possibles,
+        default=[]
+    )
+if manual_numeric:
+    numeric_cols += [col for col in manual_numeric if col not in numeric_cols]
+    # Bijwerken grouping_cols als override gebruikt wordt
+    grouping_cols = [col for col in all_cols if col not in numeric_cols]
+    # Waarschuw dat een override actief is
+    st.sidebar.warning(f"Handmatige override: {', '.join(manual_numeric)} toegevoegd aan numerieke kolommen.")
+
 # --- Geavanceerde Instellingen ---
 selected_years = []
 show_data_labels = False
@@ -158,7 +181,6 @@ if advanced_mode:
     st.sidebar.text_input("Formule Editor (Toekomst)", disabled=True)
     st.sidebar.selectbox("Decimale Toggle (Toekomst)", ["Aantallen", "Decimalen"], disabled=True)
 
-
 # --- DATA VERWERKING ---
 
 if not y_axis or not x_axes:
@@ -174,11 +196,8 @@ if advanced_mode and year_col and selected_years:
 
 # 2. Converteer geselecteerde X-assen naar numeriek (met robuuste Nederlandse notatie correctie)
 for col in x_axes:
-    # 1. Verwijder '.' (duizendtal)
-    # 2. Vervang ',' (decimaal) door '.'
-    # 3. Converteer naar numeriek
     cleaned_series = df_processed[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-    
+
     df_processed[col] = pd.to_numeric(
         cleaned_series, 
         errors='coerce'
@@ -195,11 +214,9 @@ except Exception as e:
 df_agg['Totaal'] = df_agg[x_axes].sum(axis=1)
 
 # 5. Selecteer Top N (hoogste waarden)
-# Haal ALTIJD de Top N Hoogste waarden op met ascending=False en .head()
 df_top_n = df_agg.sort_values('Totaal', ascending=False).head(top_n)
 
 # 5b. Sorteer de Top N subset voor de visuele weergave (Plotly)
-# Pas nu de door de gebruiker gewenste volgorde toe op de Top N selectie
 df_top_n = df_top_n.sort_values('Totaal', ascending=sort_ascending)
 
 # 6. 'Melt' de data voor gestapelde grafiek in Plotly
@@ -227,7 +244,6 @@ if not advanced_mode or not year_col:
 
 title = f"Top {top_n} {y_axis} | Totaal van: {', '.join(x_axes)} {jaar_info}"
 
-# Maak de gestapelde staafgrafiek
 fig = px.bar(
     df_melted,
     y=y_axis,
@@ -247,8 +263,6 @@ fig.update_layout(
 
 # Voeg datalabels toe indien aangevinkt
 if advanced_mode and show_data_labels:
-    # Formatteer de labels met een duizendtal-separator
-    # textposition='outside' zorgt ervoor dat de labels altijd buiten de staven staan
     fig.update_traces(
         texttemplate='%{value:,.0f}', 
         textposition='outside' 
@@ -258,7 +272,6 @@ st.plotly_chart(fig, use_container_width=True)
 
 # --- TOON DATA (optioneel) ---
 with st.expander("Toon de Top N geaggregeerde data"):
-    # Zorg ervoor dat de tabel in de hoogste volgorde wordt weergegeven
     st.dataframe(df_top_n.set_index(y_axis).sort_values('Totaal', ascending=False))
 
 with st.expander("Toon de eerste 100 rijen van de ruwe data"):
