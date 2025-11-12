@@ -1,164 +1,229 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 # Hulpfunctie om numerieke kolommen te identificeren op basis van inhoud
 @st.cache_data
 def get_numeric_cols(df):
     """
-    Identificeer numerieke kolommen door eerste 50 rijen te controleren.
-    Een kolom is numeriek als >80% van de waarden numeriek is.
+    Identificeert numerieke kolommen door de eerste 50 rijen te controleren.
+    Een kolom wordt als numeriek beschouwd als >80% van de waarden numeriek is.
+    
+    Gebruikt Nederlandse/Europese notatie: verwijdert . (duizendtal), vervangt , door . (decimaal).
     """
     numeric_cols = []
     for col in df.columns:
+        # Snelle check als het type al numeriek is
         if pd.api.types.is_numeric_dtype(df[col]):
             numeric_cols.append(col)
             continue
+        
+        # Probeer te converteren als het een string/object type is
         try:
-            sample = df[col].sample(min(50, len(df))).astype(str).str.replace('.', '', regex=False).str.strip()
-            numeric_ratio = pd.to_numeric(sample, errors='coerce').notna().mean()
+            # Neem een steekproef, zet naar string
+            sample = df[col].sample(min(50, len(df))).astype(str)
+            
+            # Opschonen voor Nederlandse notatie: verwijder . (duizendtal), vervang , door . (decimaal)
+            cleaned_sample = sample.str.replace('.', '', regex=False).str.replace(',', '.', regex=False).str.strip()
+            
+            # Check of het (na opschonen) numeriek is
+            numeric_ratio = pd.to_numeric(cleaned_sample, errors='coerce').notna().mean()
+            
+            # Een kolom is numeriek als minstens 80% van de steekproef succesvol geconverteerd kon worden
             if numeric_ratio >= 0.8:
                 numeric_cols.append(col)
         except Exception:
             continue
     return numeric_cols
 
+# Hulpfunctie om de 'jaar'-kolom te vinden
 @st.cache_data
 def get_year_col(df):
     """Zoekt naar een kolom die waarschijnlijk een jaartal vertegenwoordigt."""
     for col in df.columns:
-        col_lower = col.lower().strip()
+        col_lower = col.lower()
         if 'jaar' in col_lower or 'onderwijsjaar' in col_lower or col_lower == 'jj':
             return col
     return None
 
+# Hulpfunctie om de CSV te laden
 @st.cache_data
 def load_data(uploaded_file):
-    """Laadt de CSV met puntkomma als scheidingsteken."""
+    """Laadt de CSV met een puntkomma als scheidingsteken."""
     try:
+        # We lezen de data in met 'object' dtype om te voorkomen dat pandas 
+        # getallen met een '.' (bijv. 1.000) als floats interpreteert.
         df = pd.read_csv(uploaded_file, delimiter=';', dtype=str)
-        df.columns = [c.strip() for c in df.columns]
         return df
     except Exception as e:
-        st.error(f"Fout bij lezen bestand: {e}")
+        st.error(f"Fout bij het lezen van het bestand: {e}")
         return None
 
 # --- PAGINA CONFIGURATIE ---
 st.set_page_config(layout="wide", page_title="MBO Dashboard")
 
 st.title("MBO Onderwijsdata Dashboard")
-st.write("Upload een CSV-bestand (met puntkomma ';') om te visualiseren.")
+st.write("Upload een CSV-bestand van DUO (met puntkomma ';') om de visualisatie te starten.")
 
+# --- FILE UPLOAD ---
 uploaded_file = st.file_uploader("Upload DUO data (csv)", type="csv")
+
 if uploaded_file is None:
     st.info("Wacht op het uploaden van een CSV-bestand.")
     st.stop()
 
+# --- DATA LADEN ---
 df = load_data(uploaded_file)
-if df is None or df.empty:
-    st.warning("Bestand bevat geen rijen of kon niet worden geladen.")
+if df is None:
     st.stop()
 
+# --- KOLOM IDENTIFICATIE ---
 all_cols = df.columns.tolist()
 numeric_cols = get_numeric_cols(df)
 year_col = get_year_col(df)
+
+# Groeperingskolommen zijn alle kolommen die niet als numeriek zijn geïdentificeerd
 grouping_cols = [col for col in all_cols if col not in numeric_cols]
 
-# --- ZIJBALK ---
+# --- ZIJBALK VOOR CONTROLES ---
 st.sidebar.header("Dashboard Instellingen")
+
+# Toggle voor geavanceerde modus
 advanced_mode = st.sidebar.toggle("Geavanceerde Weergave", value=False)
 
 # --- Basis Instellingen ---
 st.sidebar.subheader("Basis Instellingen")
-top_n = st.sidebar.selectbox("Toon Top Aantal:", [5, 10, 20], index=1)
-if not grouping_cols:
-    st.error("Geen categorische kolommen gevonden voor Y-as. Controleer het CSV-bestand.")
-    st.stop()
-if not numeric_cols:
-    st.error("Geen numerieke kolommen gevonden voor X-as. Controleer het CSV-bestand.")
-    st.stop()
+top_n = st.sidebar.selectbox(
+    "Toon Top Aantal:", 
+    [5, 10, 20], 
+    index=1 # Standaard Top 10
+)
 
-y_axis = st.sidebar.selectbox("Y-as (Labels/Groepering):", grouping_cols, index=0)
+y_axis = st.sidebar.selectbox(
+    "Y-as (Labels/Groepering):", 
+    grouping_cols, 
+    index=0
+)
+
+# Probeer de eerste numerieke kolom als standaard te selecteren
 default_x = [numeric_cols[0]] if numeric_cols else []
-x_axes = st.sidebar.multiselect("X-as (Waarden/Sommatie - Meerdere mogelijk):", numeric_cols, default=default_x)
-sort_order_str = st.sidebar.selectbox("Ordening:", ["Hoog naar Laag", "Laag naar Hoog"], index=0)
+
+x_axes = st.sidebar.multiselect(
+    "X-as (Waarden/Sommatie - Meerdere mogelijk):", 
+    numeric_cols, 
+    default=default_x
+)
+
+sort_order_str = st.sidebar.selectbox(
+    "Ordening:", 
+    ["Hoog naar Laag", "Laag naar Hoog"], 
+    index=0
+)
 sort_ascending = (sort_order_str == "Laag naar Hoog")
 
+# --- Geavanceerde Instellingen ---
 selected_years = []
 show_data_labels = False
+
 if advanced_mode:
     st.sidebar.subheader("Geavanceerde Opties")
-    # Jaar slicer
+    
+    # Jaar Slicer
     if year_col:
         try:
+            # Converteer jaarkolom naar numeriek voor sortering
             years = pd.to_numeric(df[year_col], errors='coerce').dropna().unique()
-            if len(years) > 0:
-                years = [str(int(y)) for y in sorted(years, reverse=True)]
-                selected_years = st.sidebar.multiselect("Filter op Jaar (Slicer):", years, default=years[0:1])
+            years.sort()
+            years = [str(int(y)) for y in years][::-1] # Sorteer aflopend
+            
+            selected_years = st.sidebar.multiselect(
+                "Filter op Jaar (Slicer):", 
+                years, 
+                default=years[0] if years else [] # Standaard nieuwste jaar
+            )
         except Exception as e:
             st.sidebar.error(f"Kon de 'jaar'-kolom niet verwerken: {e}")
     else:
         st.sidebar.info("Geen 'jaar'-kolom gevonden voor de slicer.")
+
+    # Data Labels Toggle
     show_data_labels = st.sidebar.checkbox("Toon waarden in grafiek", value=False)
+
+    # Placeholders voor toekomstige functies
     st.sidebar.text_input("Formule Editor (Toekomst)", disabled=True)
     st.sidebar.selectbox("Decimale Toggle (Toekomst)", ["Aantallen", "Decimalen"], disabled=True)
+
+
+# --- DATA VERWERKING ---
 
 if not y_axis or not x_axes:
     st.warning("Selecteer alstublieft een Y-as en minimaal één X-as in de zijbalk.")
     st.stop()
 
-# --- DATA VERWERKEN ---
+# Kopieer de data om te verwerken
 df_processed = df.copy()
 
-# 1. Jaar filter (indien geselecteerd)
+# 1. Jaar Filter (indien geselecteerd)
 if advanced_mode and year_col and selected_years:
-    df_processed = df_processed[df_processed[year_col].astype(str).isin(selected_years)]
+    df_processed = df_processed[df_processed[year_col].isin(selected_years)]
 
-# 2. Converteer gekozen X-assen naar numeriek
+# 2. Converteer geselecteerde X-assen naar numeriek (met robuuste Nederlandse notatie correctie)
 for col in x_axes:
+    # 1. Verwijder '.' (duizendtal)
+    # 2. Vervang ',' (decimaal) door '.'
+    # 3. Converteer naar numeriek
+    cleaned_series = df_processed[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+    
     df_processed[col] = pd.to_numeric(
-        df_processed[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), 
+        cleaned_series, 
         errors='coerce'
     ).fillna(0)
 
 # 3. Aggregeer de data
 try:
-    df_agg = df_processed.groupby(y_axis, as_index=False)[x_axes].sum()
+    df_agg = df_processed.groupby(y_axis)[x_axes].sum().reset_index()
 except Exception as e:
-    st.error(f"Fout bij aggregeren van data: {e}")
+    st.error(f"Fout bij het aggregeren van data. Controleer of {y_axis} correct is: {e}")
     st.stop()
 
-if df_agg.empty:
-    st.warning("Geen geaggregeerde data voor deze selectie.")
-    st.stop()
+# 4. Bereken Totaal voor sortering
+df_agg['Totaal'] = df_agg[x_axes].sum(axis=1)
 
-# 4. Bereken totaal per groepering (voor sortering en selectie top N)
-df_agg['__Totaal__'] = df_agg[x_axes].sum(axis=1)
-df_agg = df_agg.sort_values('__Totaal__', ascending=False)
-df_top_n = df_agg.head(top_n).copy()
-# Let op: sorteer nogmaals alleen binnen de top N voor het plotten:
-df_top_n = df_top_n.sort_values('__Totaal__', ascending=sort_ascending)
+# 5. Selecteer Top N (hoogste waarden)
+# Haal ALTIJD de Top N Hoogste waarden op met ascending=False en .head()
+df_top_n = df_agg.sort_values('Totaal', ascending=False).head(top_n)
 
-# 5. Data "melt" voor Plotly
+# 5b. Sorteer de Top N subset voor de visuele weergave (Plotly)
+# Pas nu de door de gebruiker gewenste volgorde toe op de Top N selectie
+df_top_n = df_top_n.sort_values('Totaal', ascending=sort_ascending)
+
+# 6. 'Melt' de data voor gestapelde grafiek in Plotly
 try:
     df_melted = df_top_n.melt(
-        id_vars=[y_axis, '__Totaal__'],
-        value_vars=x_axes,
-        var_name='Meetwaarde',
+        id_vars=[y_axis, 'Totaal'], 
+        value_vars=x_axes, 
+        var_name='Meetwaarde', 
         value_name='Waarde'
     )
 except Exception as e:
-    st.error(f"Fout bij het omvormen van de data voor grafiek: {e}")
+    st.error(f"Fout bij het 'melten' van de data: {e}")
     st.stop()
 
-if df_melted.empty:
-    st.warning("Geen data gevonden voor de geselecteerde criteria.")
+# --- GRAFIEK RENDEREN ---
+
+if df_melted.empty or df_top_n['Totaal'].sum() == 0:
+    st.warning("Geen geldige data gevonden voor de geselecteerde criteria of de totale waarde is nul. Controleer uw X-as selectie en Jaarfilters.")
     st.stop()
 
-# --- GRAFIEK MET PLOTLY ---
-jaar_info = f"(Jaren: {', '.join(selected_years)})" if advanced_mode and year_col and selected_years else ""
+# Maak de titel
+jaar_info = f"(Jaren: {', '.join(selected_years)})" if selected_years else "(Alle jaren)"
+if not advanced_mode or not year_col:
+    jaar_info = ""
+
 title = f"Top {top_n} {y_axis} | Totaal van: {', '.join(x_axes)} {jaar_info}"
 
+# Maak de gestapelde staafgrafiek
 fig = px.bar(
     df_melted,
     y=y_axis,
@@ -166,28 +231,31 @@ fig = px.bar(
     color='Meetwaarde',
     orientation='h',
     title=title,
-    labels={'Waarde': f"Totaal ({', '.join(x_axes)})", 'Meetwaarde': 'Waarde'}
+    labels={'Waarde': f"Totaal ({', '.join(x_axes)})", 'Meetwaarde': 'Geselecteerde X-as'}
 )
 
-# Sorteer de Y-as op totale waarde (zodat hoogste altijd bovenaan is)
+# Sorteer de Y-as op basis van de totale waarde
 fig.update_layout(
     yaxis={'categoryorder': ('total ascending' if sort_ascending else 'total descending')},
     height=600,
     legend_title_text='Meetwaarden (X-as)'
 )
 
-# Toon datalabels indien gewenst
+# Voeg datalabels toe indien aangevinkt
 if advanced_mode and show_data_labels:
+    # Formatteer de labels met een duizendtal-separator
+    # textposition='outside' zorgt ervoor dat de labels altijd buiten de staven staan
     fig.update_traces(
-        texttemplate='%{x:,.0f}',
-        textposition='outside'
+        texttemplate='%{value:,.0f}', 
+        textposition='outside' 
     )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# --- DATAFRAME (optioneel) ---
+# --- TOON DATA (optioneel) ---
 with st.expander("Toon de Top N geaggregeerde data"):
-    st.dataframe(df_top_n.set_index(y_axis).sort_values('__Totaal__', ascending=False).drop(columns='__Totaal__'))
+    # Zorg ervoor dat de tabel in de hoogste volgorde wordt weergegeven
+    st.dataframe(df_top_n.set_index(y_axis).sort_values('Totaal', ascending=False))
 
 with st.expander("Toon de eerste 100 rijen van de ruwe data"):
     st.dataframe(df.head(100))
