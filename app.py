@@ -217,7 +217,7 @@ fig = px.bar(
 
 # Sorteer de Y-as op basis van de totale waarde
 fig.update_layout(
-    yaxis={'categoryorder':'total ascending' if sort_ascending else 'categoryorder':'total descending'},
+    yaxis={'categoryorder': ('total ascending' if sort_ascending else 'total descending')},
     height=600,
     legend_title_text='Meetwaarden (X-as)'
 )
