@@ -11,7 +11,7 @@ from urllib.parse import urljoin
 st.set_page_config(page_title="DUO MBO Dashboard", layout="wide")
 
 # Dit is de specifieke startpagina zoals gevraagd
-START_URL = "https://duo.nl/open_onderwijsdata/middelbaar-beroepsonderwijs/aantal-studenten/"
+START_URL = "https://duo.nl/open_onderwijsdata/middelbaar-beroepsonderwijs/aantal-studenten/studenten-mbo-rio.jsp"
 
 # -----------------------------------------------------------------------------
 # 2. SCRAPER FUNCTIES
