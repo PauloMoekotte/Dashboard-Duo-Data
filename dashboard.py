@@ -13,7 +13,7 @@ from utils import detect_and_clean_data
 st.set_page_config(page_title="DUO MBO Dashboard", layout="wide")
 
 # Dit is de specifieke startpagina zoals gevraagd
-START_URL = "https://duo.nl/open_onderwijsdata/middelbaar-beroepsonderwijs/aantal-studenten/studenten-mbo-rio.jsp"
+START_URL = "https://duo.nl/open_onderwijsdata/middelbaar-beroepsonderwijs/aantal-studenten/"
 
 # -----------------------------------------------------------------------------
 # 2. SCRAPER FUNCTIES
