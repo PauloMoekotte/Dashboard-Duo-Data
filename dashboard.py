@@ -4,6 +4,8 @@ import plotly.express as px
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+import io
+from utils import detect_and_clean_data
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURATIE & STARTPUNT
@@ -106,45 +108,32 @@ def find_csv_links(soup_element, base_url, category_prefix):
     return found
 
 # -----------------------------------------------------------------------------
-# 3. DATA VERWERKING LOGICA (Ongewijzigd, want werkt goed)
+# 3. DATA VERWERKING LOGICA
 # -----------------------------------------------------------------------------
 
 @st.cache_data
-def load_raw_data(uploaded_file):
+def load_data_from_url(url):
+    """Laadt een CSV-bestand direct van een URL."""
     try:
-        df = pd.read_csv(uploaded_file, sep=';', decimal=',', encoding='latin-1', dtype=str)
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+
+        # Gebruik io.StringIO om de tekst als een bestand te behandelen
+        csv_file = io.StringIO(response.text)
+
+        # Probeer met ; separator
+        df = pd.read_csv(csv_file, sep=';', decimal=',', encoding='latin-1', dtype=str)
+
+        # Fallback naar , separator als er weinig kolommen zijn
         if df.shape[1] < 2:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, sep=',', decimal='.', dtype=str)
+            csv_file.seek(0)
+            df = pd.read_csv(csv_file, sep=',', decimal='.', dtype=str)
+
         return df
     except Exception as e:
-        st.error(f"Kon bestand niet lezen: {e}")
+        st.error(f"Kon data niet van URL laden: {e}")
         return None
 
-def detect_and_clean_data(df_raw):
-    df_clean = df_raw.copy()
-    mask_less_than_5 = pd.DataFrame(False, index=df_raw.index, columns=df_raw.columns)
-    numerics = []
-    categoricals = []
-
-    for col in df_raw.columns:
-        series_clean = df_raw[col].str.strip()
-        is_privacy_val = series_clean == '<5'
-        mask_less_than_5[col] = is_privacy_val
-        
-        series_numeric_ready = series_clean.str.replace(',', '.', regex=False)
-        converted = pd.to_numeric(series_numeric_ready, errors='coerce')
-        
-        valid_count = converted.notna().sum()
-        total_count = len(df_raw)
-        
-        if valid_count > 0 and (is_privacy_val.any() or valid_count > 0.5 * total_count):
-            df_clean[col] = converted
-            numerics.append(col)
-        else:
-            categoricals.append(col)
-
-    return df_clean, mask_less_than_5, categoricals, numerics
 
 # -----------------------------------------------------------------------------
 # 4. DASHBOARD UI
@@ -160,31 +149,38 @@ with st.container():
     # Run scraper
     csv_options = scrape_duo_specific_structure(START_URL)
     
-    col_sel, col_act = st.columns([2, 2])
-    with col_sel:
-        selected_label = st.selectbox("Beschikbare CSV bestanden:", list(csv_options.keys()))
-    
-    with col_act:
-        if selected_label and csv_options[selected_label]:
-            dl_link = csv_options[selected_label]
-            st.success("Link gevonden!")
-            st.markdown(f"📥 **[Klik hier om bestand te downloaden]({dl_link})**")
-            st.caption("Sla dit bestand op en upload het hieronder.")
+    # UI voor selectie
+    selected_label = st.selectbox(
+        "Beschikbare CSV bestanden:",
+        list(csv_options.keys()),
+        key="csv_selection"
+    )
+
+    # DataFrame initialiseren in session state
+    if 'df_raw' not in st.session_state:
+        st.session_state.df_raw = None
+
+    # Knop om de data te laden
+    if selected_label and csv_options[selected_label]:
+        if st.button("📈 Laad en Analyseer Data", key="load_data_button"):
+            url = csv_options[selected_label]
+            with st.spinner("Data wordt gedownload en verwerkt..."):
+                st.session_state.df_raw = load_data_from_url(url)
+    else:
+        # Reset als de selectie ongeldig is
+        st.session_state.df_raw = None
 
 st.divider()
 
-# --- SECTIE 2: UPLOAD & VISUALISATIE ---
-st.markdown("### 2. Visualisatie")
-uploaded_file = st.file_uploader("Upload het CSV bestand", type=['csv'])
+# --- SECTIE 2: VISUALISATIE (alleen als data geladen is) ---
+if st.session_state.df_raw is not None:
+    st.markdown("### 2. Visualisatie")
+    df_raw = st.session_state.df_raw
 
-if uploaded_file is not None:
-    df_raw = load_raw_data(uploaded_file)
+    df_clean, mask_lt5, init_cats, init_nums = detect_and_clean_data(df_raw)
+    all_cols = df_clean.columns.tolist()
 
-    if df_raw is not None:
-        df_clean, mask_lt5, init_cats, init_nums = detect_and_clean_data(df_raw)
-        all_cols = df_clean.columns.tolist()
-
-        col_graph, col_settings = st.columns([3, 1])
+    col_graph, col_settings = st.columns([3, 1])
 
         # --- RECHTERKANT: INSTELLINGEN ---
         with col_settings:
@@ -259,6 +255,6 @@ if uploaded_file is not None:
                     st.success(f"Geen waarden '<5' aangetroffen voor de getoonde categorieën in **{x_axis}**.")
 
             else:
-                st.info("Kies links een bestand, en rechts de Assen.")
+                st.info("Selecteer de gewenste X- en Y-assen om de grafiek te tonen.")
 else:
-    st.info("Wacht op de scraper en kies een bestand om te beginnen.")
+    st.info("Selecteer hierboven een bestand en klik op 'Laad en Analyseer Data' om te beginnen.")
